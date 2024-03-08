@@ -1,0 +1,310 @@
+@create $room named Self-Cleaning Room:Self-Cleaning Room
+@prop #27777."trigger_delay" 20 rc
+@prop #27777."delay" 3600 rc
+@prop #27777."remove_object_msg" "The housekeeper arrives to remove %[tcurrent_names] from %t." rc
+@prop #27777."trashtimes" {} r
+@prop #27777."trashobjects" {} r
+@prop #27777."current_names" "nothing" r
+@prop #27777."ejected" {} r #49853
+@prop #27777."maximum_players" 50 rc
+@prop #27777."idle_max" 300 rc
+@prop #27777."being_shoved" {} r #49853
+@prop #27777."self_cleaning" 0 r
+"#27777.("entrances") => E_PERM (Permission denied)
+"#27777.("exits") => E_PERM (Permission denied)
+"#27777.("key") => E_PERM (Permission denied)
+;;#27777.("aliases") = {"Self-Cleaning Room"}
+;;#27777.("description") = "This room optionally keeps itself relatively free of garbage.  If this.self_cleaning is set, nonplayer objects which are not present in .residents are only allowed to remain for this.delay seconds (default one hour).  This is not perfect; it uses :enterfunc as its trigger instead of forking.  Messages:  @remove_object gets printed to everyone in the room when an object is ejected.  [Note kluge: instead of %n to describe the object being removed, use %[tcurrent_names]; this is so multiple items will be mentioned correctly in one message.].  @self-clean commandline verb toggles self cleaning, :set_self_cleaning permits programmatic shift."
+;;#27777.("object_size") = {11232, 1709626006}
+
+@verb #27777:"enterfunc" this none this
+@program #27777:enterfunc
+pass(@args);
+if (!this.self_cleaning)
+  return;
+endif
+item = args[1];
+now = time();
+if ((lt = length(this.trashobjects)) != length(this.trashtimes))
+  "somehow these got out of sync, force a new times list.";
+  this.trashtimes = $list_utils:make(lt, now);
+endif
+if (this:litterp(item))
+  if (loc = item in this.trashobjects)
+    this.trashtimes[loc] = now;
+  else
+    this.trashobjects = {@this.trashobjects, item};
+    this.trashtimes = {@this.trashtimes, now};
+  endif
+else
+  this:check_if_too_full(item);
+endif
+ejectables = {};
+deleteables = {};
+for i in [1..length(this.trashobjects)]
+  item = this.trashobjects[i];
+  if ((!valid(item)) || (!this:litterp(item)))
+    "Maybe a player who connected, no longer litter.";
+    "Also, if a !valid object gets in here, we're in trouble and better flush it.";
+    deleteables = {@deleteables, item};
+  elseif (this:flush_item_now(i, now))
+    ejectables = {@ejectables, item};
+  endif
+endfor
+for x in (deleteables)
+  this:deleteitem(x);
+endfor
+if (ejectables)
+  fork (this.trigger_delay)
+    for x in (ejectables)
+      if (x.location == this)
+        this:eject(x);
+      else
+        ejectables = setremove(ejectables, x);
+        if (x in this.trashobjects)
+          this:deleteitem(x);
+        endif
+      endif
+      this.current_names = $string_utils:english_list($list_utils:map_verb(ejectables, "title"));
+    endfor
+    if (ejectables)
+      this:announce_all($string_utils:pronoun_sub(this.remove_object_msg));
+    endif
+  endfork
+endif
+.
+
+@verb #27777:"exitfunc" this none this
+@program #27777:exitfunc
+if (callers()[1][1..4] != {#-1, "move", #-1, #-1})
+  return E_PERM;
+endif
+pass(@args);
+if (this.self_cleaning)
+  this:deleteitem(args[1]);
+endif
+.
+
+@verb #27777:"eject eject_basic" this none this rxd #89987
+@program #27777:eject
+set_task_perms($wiz_utils:random_wizard());
+if (caller in {this, this.owner})
+  if (this.self_cleaning)
+    x = args[1];
+    if (x.location == this)
+      this.ejected = setadd(this.ejected, x);
+      fork (this.delay * 5)
+        this.ejected = setremove(this.ejected, x);
+      endfork
+    endif
+  endif
+  return pass(@args);
+else
+  return E_PERM;
+endif
+.
+
+@verb #27777:"remove_object_msg" this none this
+@program #27777:remove_object_msg
+return this.(verb);
+.
+
+@verb #27777:"litterp" this none this rx
+@program #27777:litterp
+item = args[1];
+if (item == this.owner)
+  return 0;
+elseif (is_player(item) && (!(item in this.residents)))
+  "nonresident idling players are litter, even if sessile";
+  return (typeof(idle_seconds(item)) == ERR) && ((time() - item.last_disconnect_time) > 300);
+else
+  "non-resident objects are litter";
+  return !(item in this.residents);
+endif
+.
+
+@verb #27777:"acceptable" this none this
+@program #27777:acceptable
+"Modified 10/19/98 by TheCat to exclude sleeping players who don't belong.";
+what = args[1];
+if ((this.self_cleaning && (ticks_left() < 15000)) && ((what in this.ejected) || this:litterp(what)))
+  "If less than 15000 ticks, we are either a spammy command line task, or, more likely, a suspended or forked task trying to auto-return.  Deny those.";
+  result = 0;
+elseif ((is_player(what) && (!$object_utils:connected(what))) && (!this:basic_accept_for_abode(what)))
+  result = 0;
+else
+  result = pass(@args);
+endif
+return result;
+.
+
+@verb #27777:"deleteitem" this none this
+@program #27777:deleteitem
+if (caller != this)
+  return E_PERM;
+endif
+item = args[1];
+if (loc = item in this.trashobjects)
+  this.trashobjects = listdelete(this.trashobjects, loc);
+  this.trashtimes = listdelete(this.trashtimes, loc);
+endif
+.
+
+@verb #27777:"too_full" this none this rxd #49853
+@program #27777:too_full
+max = this.maximum_players;
+cp = connected_players();
+for x in (this.contents)
+  if (x in cp)
+    if ((max = max - 1) < 0)
+      return 1;
+    endif
+  endif
+endfor
+return 0;
+.
+
+@verb #27777:"most_idle_player" this none this rx
+@program #27777:most_idle_player
+idler = #-1;
+time = 0;
+for x in (this.contents)
+  if (idle_seconds(x) > time)
+    time = idle_seconds(idler = x);
+  endif
+endfor
+return time && {idler, time};
+.
+
+@verb #27777:"shove_out" this none this rxd #49853
+@program #27777:shove_out
+"shove_out(who, ..disallowed destinations...)";
+"since this can move people, requires permissions";
+if ((caller != this) && (!caller_perms().wizard))
+  return E_PERM;
+endif
+who = args[1];
+msg = args[2];
+poss_exits = this.exits;
+while (poss_exits)
+  exit = poss_exits[random(length(poss_exits))];
+  poss_exits = setremove(poss_exits, exit);
+  if ((!(exit.dest in args)) && exit.dest:acceptable(who))
+    break;
+  else
+    exit = 0;
+  endif
+endwhile
+if (typeof(exit) != OBJ)
+  return 0;
+endif
+player = who;
+this:shove_through_exit(exit, msg);
+return 1;
+.
+
+@verb #27777:"check_if_too_full" this none this rxd #49853
+@program #27777:check_if_too_full
+item = args[1];
+if (is_player(item) && this:too_full())
+  if ((who = this:most_idle_player()) && (who[2] > this.idle_max))
+    this:shove_out(who[1], {"", "It's awfully crowded in here to idle... you decide to go somewhere else less noisy.", ""});
+  elseif (ents = $set_utils:intersection(this.entrances, $list_utils:slice(callers())))
+    if (item.location == this)
+      this:shove_out(item, {"", "It's too crowded in here, and you decide to explore a little.", ""}, @$list_utils:map_property(ents, "source"));
+    endif
+  endif
+endif
+.
+
+@verb #27777:"shove_through_exit" this none this rxd #67
+@program #27777:shove_through_exit
+if (caller != this)
+  return E_PERM;
+endif
+fork (0)
+  who = player;
+  if (who.location != this)
+    "don't do it, not here";
+    return;
+  endif
+  exit = args[1];
+  dest = exit.dest;
+  set_task_perms(player);
+  who:tell_lines(args[2]);
+  if (who.location == this)
+    exit:move(who);
+  endif
+  if (who.location == this)
+    "the 'eject' makes sure that they don't auto-return, and they also move";
+    this:eject_basic(who);
+  endif
+endfork
+fork (1)
+  "REALLY get them out of here, dang it!  In case they killed the above task";
+  if (player.location == this)
+    this:eject_basic(player);
+    dobj = player;
+    this:announce_all_but({player}, this:oejection_msg());
+  endif
+endfork
+.
+
+@verb #27777:"flush_item_now" this none this
+@program #27777:flush_item_now
+"args[1] is an index into this.trashobjects";
+"args[2] is now, so we don't have to recalculate it for every single item.";
+"Returns 1 if item should be flushed now, else 0.";
+index = args[1];
+now = args[2];
+return (now - this.trashtimes[index]) > this.delay;
+.
+
+@verb #27777:"forget_trash" this none this
+@program #27777:forget_trash
+"This verb clears the record of litter in this room, and should be called after changing this.self_cleaning from 1 to 0.";
+if ((caller == this) || $perm_utils:controls(caller_perms(), this))
+  this.trashtimes = {};
+  this.trashobjects = {};
+endif
+.
+
+@verb #27777:"@self-clean" any any none rxd
+@program #27777:@self-clean
+"If no args, toggle state.  Else turn self-cleaning on or off";
+"+x so you can call it on generics to toggle.";
+if ($perm_utils:controls(valid(caller_perms()) ? caller_perms() | player, this))
+  switch = argstr ? argstr | "toggle";
+  if (this.self_cleaning)
+    if ((switch == "toggle") || (switch == "off"))
+      this:set_self_cleaning(0);
+      this:forget_trash();
+      player:tell(this:title() + " is no longer self cleaning.");
+    elseif (switch == "on")
+      player:tell("Self-cleaning is already on.");
+    else
+      player:tell("Try this instead:  @self-clean off");
+    endif
+  else
+    if ((switch == "toggle") || (switch == "on"))
+      this:set_self_cleaning(1);
+      player:tell("Self-cleaning turned on.");
+    elseif (switch == "off")
+      player:tell("Self-cleaning is already on.");
+    else
+      player:tell("Try this instead:  @self-clean on");
+    endif
+  endif
+else
+  player:tell("Permission denied.");
+endif
+.
+
+@verb #27777:"set_self_cleaning" this none this
+@program #27777:set_self_cleaning
+if ((caller == this) || $perm_utils:controls(caller_perms(), this))
+  return this.self_cleaning = args[1];
+else
+  return E_PERM;
+endif
+.
