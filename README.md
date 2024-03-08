@@ -5,6 +5,6 @@ Do a Find\replace using #27777 as the find, and the new number as the replace.
 
 You can also create a property on #0 to reference the generic easier.  For example on the Self Clearning Room, after I created it on an 
 external Moo, it gave me the #238.
-@property #0.gSCR "#238"
+@property #0.gSCR #238
 
 Any time you reference $gSCR it will substitute #238.
