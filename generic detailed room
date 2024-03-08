@@ -1,0 +1,381 @@
+@create $gSCR named generic detailed room:detailed room
+@prop #6464."undetailed_msg" "I see no \"%n\" here." rc
+"#6464.("detail_descs") => E_PERM (Permission denied)
+"#6464.("details") => E_PERM (Permission denied)
+@prop #6464."readable" 0 rc
+"#6464.("entrances") => E_PERM (Permission denied)
+"#6464.("exits") => E_PERM (Permission denied)
+"#6464.("key") => E_PERM (Permission denied)
+;;#6464.("aliases") = {"detailed room"}
+;;#6464.("description") = "This is an advanced version of an object first designed by Xorian. In a detailed room, you can create details, for example a description of the ceiling, which are not immediately visible to the visitor, but which can be seen with 'look ceiling'. There are instructions for it in Frand's Big Manual, in the Library."
+;;#6464.("object_size") = {14985, 1709626006}
+
+@verb #6464:"@clear" none none none rxd
+@program #6464:@clear
+"'@clear' - Remove all details from a room.";
+if (this:insecure(caller))
+  player:tell(E_PERM);
+  return E_PERM;
+endif
+this:clear();
+player:tell("All details removed from the room.");
+.
+
+@verb #6464:"@det*ail" any is any rxd
+@program #6464:@detail
+"'@detail <name> is <desc>' - Create a new detail with the given description. If the <name> exactly matches some name from an old description, the old one is replaced instead.";
+if (this:insecure(caller))
+  player:tell(E_PERM);
+  return E_PERM;
+endif
+name = dobjstr;
+desc = {iobjstr};
+if (replace = this:old_detail(name))
+  msg = ("Old detail " + this.details[replace]) + " replaced.";
+else
+  msg = "Detail added.";
+endif
+this:detail(name, desc, replace);
+player:tell(msg);
+.
+
+@verb #6464:"@rmd*etail" any none none rxd
+@program #6464:@rmdetail
+"'@rmdetail <name>' - Remove a detail from the room.";
+if (this:insecure(caller))
+  player:tell(E_PERM);
+  return E_PERM;
+endif
+if (this:rmdetail(dobjstr))
+  player:tell("Detail removed.");
+else
+  player:tell("There is no such detail on the room.");
+endif
+.
+
+@verb #6464:"@mored*etail" any is any rxd
+@program #6464:@moredetail
+"'@moredetail <name> is <desc>' - Add a paragraph of description to the given detail.";
+if (this:insecure(caller))
+  player:tell(E_PERM);
+  return E_PERM;
+endif
+i = this:match_detail(dobjstr);
+if (i)
+  desc = {@this.detail_descs[i], iobjstr};
+  this.detail_descs = listset(this.detail_descs, desc, i);
+  player:tell("Paragraph added to detail.");
+else
+  player:tell("There is no such detail to add to the description of.");
+endif
+.
+
+@verb #6464:"@details" none none none rxd
+@program #6464:@details
+"'@details' - List the (names of the) details on the room.";
+if (this:insecure(caller))
+  player:tell(E_PERM);
+  return E_PERM;
+endif
+for item in (this.details)
+  player:tell("  ", item);
+endfor
+player:tell("--");
+.
+
+@verb #6464:"insecure" this none this
+@program #6464:insecure
+"'this:insecure (caller)' - Return whether it's considered OK for 'caller' to call a dangerous verb. The 'dangerous' verbs are the ones that can change things. Some verbs which merely look at things are also considered mildly dangerous, because they might let users sneak peeks at details that the room owner wants hidden. NOTICE: the 'from.owner == this.owner' clause is not quite secure.";
+from = args[1];
+return (!valid(from)) || (!(((from == this) || (from.owner == this.owner)) || from.wizard));
+.
+
+@verb #6464:"match_detail" this none this
+@program #6464:match_detail
+"'match_detail (<string>)' - Return either the index of a detail, if the string matches one, or 0 if not. There's no check for ambiguity.";
+if ((!this.readable) && this:insecure(caller))
+  player:tell(E_PERM);
+  return E_PERM;
+endif
+string = args[1];
+if (string && (string[1] == "="))
+  return 0;
+endif
+for i in [1..length(this.details)]
+  detail = this.details[i];
+  while (pos = index(detail, string))
+    if (detail[1] == "=")
+      end = pos + length(string);
+      if ((detail[pos - 1] in {",", "="}) && (((end - 1) == length(detail)) || ((end < length(detail)) && (detail[end] == ","))))
+        return i;
+      endif
+    else
+      if ((pos == 1) || (detail[pos - 1] == ","))
+        return i;
+      endif
+    endif
+    "Check for further matches in this detail: skip just past next ','.";
+    detail = detail[pos + 1..length(detail)];
+    if (comma = index(detail, ","))
+      detail = detail[comma + 1..length(detail)];
+    else
+      detail = "";
+    endif
+  endwhile
+endfor
+return 0;
+.
+
+@verb #6464:"fetch_detail" this none this
+@program #6464:fetch_detail
+"'fetch_detail (<string>)' - Return either the description of a detail, if the string matches one, or this.undetailed_msg if not.";
+if ((!this.readable) && this:insecure(caller))
+  player:tell(E_PERM);
+  return E_PERM;
+endif
+detail = args[1];
+i = this:match_detail(detail);
+return i ? this:detail_desc(i) | this:undetailed_msg(detail);
+.
+
+@verb #6464:"detail_desc" this none this
+@program #6464:detail_desc
+"Return the args [1]'th description.";
+if ((!this.readable) && this:insecure(caller))
+  player:tell(E_PERM);
+  return E_PERM;
+endif
+return this.detail_descs[args[1]];
+.
+
+@verb #6464:"undetailed_msg" this none this
+@program #6464:undetailed_msg
+msg = strsub(this.undetailed_msg, "%n", args[1], 1);
+return {msg};
+.
+
+@verb #6464:"l*ook" any any any rxd
+@program #6464:look
+"Perform a look. Objects in the room have priority over details; if somebody drops 'stain' on the floor, then any 'stain' detail won't be visible.";
+if (((!dobjstr) || prepstr) || valid(this:match_object(dobjstr)))
+  pass(@args);
+else
+  player:tell_lines(this:fetch_detail(dobjstr));
+endif
+.
+
+@verb #6464:"clear" this none this
+@program #6464:clear
+"'clear()' - Remove all details from a room.";
+if (this:insecure(caller))
+  return E_PERM;
+endif
+this.details = {};
+this.detail_descs = {};
+.
+
+@verb #6464:"detail" this none this
+@program #6464:detail
+"'detail (<name>, <desc>)', 'detail (<name>, <desc>, <index>)' - Create a new detail, or replace an old one. <name> is a string and <desc> is a list. <index> is the index of a description to be replaced; if <index> is 0 or missing, the description is added to the end of the list instead.";
+if (this:insecure(caller))
+  return E_PERM;
+endif
+name = args[1];
+desc = args[2];
+if (length(args) >= 3)
+  replace = args[3];
+else
+  replace = 0;
+endif
+if (replace)
+  this.details = listset(this.details, name, replace);
+  this.detail_descs = listset(this.detail_descs, desc, replace);
+else
+  this.details = {@this.details, name};
+  this.detail_descs = {@this.detail_descs, desc};
+endif
+.
+
+@verb #6464:"rmdetail" this none this
+@program #6464:rmdetail
+"'rmdetail (<name>)' - Remove a detail from the room. Returns 1 if the detail was removed, 0 if there wasn't one there to remove.";
+if (this:insecure(caller))
+  return E_PERM;
+endif
+i = this:match_detail(args[1]);
+if (i)
+  this.details = listdelete(this.details, i);
+  this.detail_descs = listdelete(this.detail_descs, i);
+  return 1;
+else
+  return 0;
+endif
+.
+
+@verb #6464:"details" this none this
+@program #6464:details
+"'details()' - Return the room's list of detail names.";
+if ((!this.readable) && this:insecure(caller))
+  return E_PERM;
+endif
+return this.details;
+.
+
+@verb #6464:"@order" any any any rxd
+@program #6464:@order
+"@order <name1> after <name2>', '@order <name1> before <name2>', '@order <name> first', '@order <name> last' - Change the order of details. The order matters when you have detail names which begin the same, and you want certain abbreviations to have priority. For example, if you have 'down' and 'door', and you want 'look d' to show the detail 'down', you have to put 'down' before 'door' in the list of details.";
+if (this:insecure(caller))
+  player:tell(E_PERM);
+  return E_PERM;
+endif
+result = this:parse_keyword(argstr, {"before", "after", "first", "last"});
+if (!result)
+  player:tell_lines({"Usage: '@order <name> first'", "       '@order <name> last'", "       '@order <name1> before <name2>'", "       '@order <name1> after <name2>'"});
+  return;
+endif
+cmd = result[1];
+name1 = result[2];
+name2 = result[3];
+if ((cmd in {"first", "last"}) && name2)
+  player:tell("Example: '@order down ", cmd, "'.");
+  return;
+elseif ((cmd in {"before", "after"}) && (!name2))
+  player:tell("Example: '@order down ", cmd, " door'.");
+  return;
+endif
+result = this:order(cmd, name1, name2);
+if (result == 0)
+  msg = "Details reordered.";
+elseif (result == 1)
+  msg = ("'" + cmd) + "' is wrong. This is Frand's mistake--better let it know.";
+elseif (result == 2)
+  msg = ("'" + name1) + "' is not the name of a detail.";
+elseif (result == 3)
+  msg = ("'" + name2) + "' is not the name of a detail.";
+elseif (result == 4)
+  msg = ((("The details '" + name1) + "' and '") + name2) + "' are the same.";
+else
+  msg = "There is an error in @order. It's Frand's fault; better let it know.";
+endif
+player:tell(msg);
+.
+
+@verb #6464:"order" this none this
+@program #6464:order
+"'order (<cmd>, <name1>, <name2>)' - <cmd> is 'before', 'after', 'first', or 'last'. If it is 'before' or 'after', put <name1> just before or just after <name2> in the list of details; if it is 'first' or 'last', put <name1> first or last in the list. Returns 0 if successful, 1 if the <cmd> is illegal, 2 if <name1> is illegal, 3 if <name2> is illegal, or 4 if <name1> and <name2> refer to the same detail.";
+if (this:insecure(caller))
+  return E_PERM;
+endif
+cmd = args[1];
+name1 = args[2];
+name2 = args[3];
+i1 = this:match_detail(name1);
+if (!i1)
+  return 2;
+endif
+if (name2)
+  i2 = this:match_detail(name2);
+else
+  i2 = 0;
+endif
+if ((cmd in {"before", "after"}) && (!i2))
+  return 3;
+endif
+if (i1 == i2)
+  return 4;
+endif
+detail = this.details[i1];
+details = listdelete(this.details, i1);
+desc = this.detail_descs[i1];
+descs = listdelete(this.detail_descs, i1);
+if (i1 < i2)
+  i2 = i2 - 1;
+endif
+if (cmd == "first")
+  this.details = {detail, @details};
+  this.detail_descs = {desc, @descs};
+elseif (cmd == "last")
+  this.details = {@details, detail};
+  this.detail_descs = {@descs, desc};
+elseif (cmd == "before")
+  this.details = listinsert(details, detail, i2);
+  this.detail_descs = listinsert(descs, desc, i2);
+elseif (cmd == "after")
+  this.details = listappend(details, detail, i2);
+  this.detail_descs = listappend(descs, desc, i2);
+else
+  return 1;
+endif
+return 0;
+.
+
+@verb #6464:"parse_keyword" this none this
+@program #6464:parse_keyword
+"'parse_keyword (<string>, {<key1>, <key2>, ...})' - Parse <string> into three components, divided by the first occurrence of any <key> from the list of keywords. Return a list {<key>, <part>} if the <key> is the last thing found, or {<key>, <part1>, <part2>} if there is something after the key. Return 0 if no key appears.";
+input = args[1];
+keys = args[2];
+for key in (keys)
+  if (start = index(input, key))
+    if (start == 1)
+      return 0;
+    endif
+    part1 = $string_utils:trim(input[1..start - 1]);
+    end = start + length(key);
+    if (end > length(input))
+      return {key, part1, ""};
+    else
+      return {key, part1, $string_utils:trim(input[end..length(input)])};
+    endif
+  endif
+endfor
+return 0;
+.
+
+@verb #6464:"old_detail" this none this
+@program #6464:old_detail
+"'old_detail (<name>)' - Given a detail name which is a list of names (e.g., 'north,south,east,west'), check whether any name on the list matches an already-existing detail. Return the index of the old detail, or 0 if none.";
+if (this:insecure(caller))
+  return E_PERM;
+endif
+name = args[1];
+replace = 0;
+for item in ($string_utils:explode(name, ","))
+  if (i = this:exact_match_detail(item))
+    replace = i;
+  endif
+endfor
+return replace;
+.
+
+@verb #6464:"exact_match_detail" this none this
+@program #6464:exact_match_detail
+"'exact_match_detail (<string>)' - Return either the index of a detail, if the string matches one exactly, or 0 if not. There's no check for ambiguity. This is used by :detail() to decide whether to create a new detail, or modify an old one, so it is prepared to ignore any '=' exact-match markers on both the input string and the target detail names.";
+if ((!this.readable) && this:insecure(caller))
+  player:tell(E_PERM);
+  return E_PERM;
+endif
+string = args[1];
+if (string && (string[1] == "="))
+  string = string[2..length(string)];
+endif
+for i in [1..length(this.details)]
+  detail = this.details[i];
+  if (detail && (detail[1] == "="))
+    detail = detail[2..length(detail)];
+  endif
+  while (pos = index(detail, string))
+    end = pos + length(string);
+    if (((pos == 1) || (detail[pos - 1] == ",")) && (((end - 1) == length(detail)) || ((end < length(detail)) && (detail[end] == ","))))
+      return i;
+    endif
+    "Check for further matches in this detail: skip just past next ','.";
+    detail = detail[pos + 1..length(detail)];
+    if (comma = index(detail, ","))
+      detail = detail[comma + 1..length(detail)];
+    else
+      detail = "";
+    endif
+  endwhile
+endfor
+return 0;
+.
