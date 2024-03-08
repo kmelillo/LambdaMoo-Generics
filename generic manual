@@ -1,0 +1,516 @@
+@create $gmt named generic manual/encyclopedia:generic manual/encyclopedia,manual/encyclopedia,encyclopedia
+@prop #4000."entry_header" {} rc
+;;#4000.("entry_header") = {"", "  -- -- --  %h", ""}
+@prop #4000."ambiguous_msg" "More than one entry begins '%q'." rc
+@prop #4000."not_found_msg" "There is no entry '%q' in %e." rc
+@prop #4000."usage_msg" "Usage: 'read <entry> in %e'." rc
+@prop #4000."short_name" "Encyclopedia" rc
+@prop #4000."query_text" "refusal" r
+@prop #4000."writers" {} rc
+@prop #4000."entry" {} r
+;;#4000.("entry") = {1}
+@prop #4000."topics" {} r
+"#4000.("key") => E_PERM (Permission denied)
+;;#4000.("aliases") = {"Frand's new generic manual/encyclopedia", "manual/encyclopedia", "encyclopedia"}
+;;#4000.("description") = "This is a fancy encyclopedia class, which is unfortunately usable only by programmers. It allows multiple-paragraph entries, any number of headings (names) for the same entry, grouped entries where one heading prints the contents of a whole set of other entries, and selective index entries under any heading. In order to make new entries into your own encyclopedia or remove old ones, you have to set your encyclopedia writable (w). This is because of the way the property permission system works. It's dangerous, don't leave w on unless you know what you're doing. The Big Manual in the Library is an instance of this encyclopedia class."
+;;#4000.("object_size") = {19789, 1709626006}
+
+@verb #4000:"read" any any any rxd
+@program #4000:read
+"'read encyclopedia' - see the description. 'read <entry> in encyclopedia' - read an entry in the encyclopedia.";
+this:touch1();
+if ((prepstr == "") && (iobjstr == ""))
+  message = this:description() || "You see nothing special.";
+elseif ((length(args) < 3) || (prepstr != "in"))
+  message = this:usage_msg();
+else
+  message = this:lookup_topic(dobjstr);
+endif
+this:tell_lines_to(player, message);
+.
+
+@verb #4000:"@see" this none none
+@program #4000:@see
+"'@see encyclopedia' - see the current working entry.";
+if (!this:writer(caller))
+  player:tell(E_PERM);
+  return E_PERM;
+endif
+entry = this.entry;
+type = entry[1];
+entry = entry[2..length(entry)];
+if (type == 0)
+  this:see_synonym(entry);
+elseif (type == 1)
+  this:see_entry(entry);
+elseif (type == 2)
+  this:see_chapter(entry);
+elseif (type == 3)
+  this:see_index(entry);
+else
+  player:tell("This entry doesn't make any sense. You'd best make a new one.");
+endif
+.
+
+@verb #4000:"@new" this any any
+@program #4000:@new
+"'@new encyclopedia' - clear out the working entry to create a new one.";
+if (!this:writer(caller))
+  player:tell(E_PERM);
+  return E_PERM;
+endif
+if ((prepstr == "") && (iobjstr == ""))
+  this.entry = {1};
+  player:tell("New entry started.");
+elseif (prepstr != "is")
+  player:tell("Try '@new ", this.short_name, "' or '@new ", this.short_name, " is <type>' where <type> is one of ", "'entry', 'synonym', 'chapter', or 'index'");
+elseif (iobjstr[1] == "e")
+  this.entry = {1};
+  player:tell("New entry started.");
+elseif (iobjstr[1] == "s")
+  this.entry = {0};
+  player:tell("New synonym entry started.");
+elseif (iobjstr[1] == "c")
+  this.entry = {2};
+  player:tell("New chapter started.");
+elseif (iobjstr[1] == "i")
+  this.entry = {3, 4};
+  player:tell("New index entry started.");
+else
+  player:tell("The entry types are 'entry', 'synonym', 'chapter', and 'index'");
+endif
+.
+
+@verb #4000:"@line" this is any
+@program #4000:@line
+"'@line encyclopedia is <text>' - add a line to the working entry. If the entry is a plain entry, the text is added. If the entry is a synonym entry, the . If the entry is a chapter entry, the given topic (if it exists) is added to the chapter. ";
+if (!this:writer(caller))
+  player:tell(E_PERM);
+  return E_PERM;
+endif
+type = this.entry[1];
+if (type == 0)
+  this:line_synonym(iobjstr);
+elseif (type == 1)
+  this:line_entry(iobjstr);
+elseif (type == 2)
+  this:line_chapter(iobjstr);
+elseif (type == 3)
+  this:line_index(iobjstr);
+endif
+.
+
+@verb #4000:"@keep" this as any
+@program #4000:@keep
+"'@keep encyclopedia as <entry>' - store the working entry as a permanent entry in the encyclopedia, under the heading <entry>.";
+if (!this:writer(caller))
+  player:tell(E_PERM);
+  return E_PERM;
+endif
+topic = iobjstr;
+prop = "e_" + topic;
+if (this:prop_exists(prop))
+  this.(prop) = this.entry;
+  message = "Replacing old";
+else
+  result = this:add_prop(prop);
+  if (result)
+    this:add_topic(topic);
+    message = "Creating new";
+  else
+    message = "Failed to create new";
+  endif
+endif
+player:tell(message + " entry '", topic, "'.");
+.
+
+@verb #4000:"index_topic" this none this
+@program #4000:index_topic
+"Given a string 's', search through this.topics to find the index of the first entry which compares >= 's'. If 's' is greater than all entries, return 1 + the number of topics. This should be a binary search, but it's not.";
+s = args[1];
+topics = this.topics;
+for i in [1..length(topics)]
+  if (topics[i] >= s)
+    return i;
+  endif
+endfor
+return 1 + length(topics);
+.
+
+@verb #4000:"find_topic" this none this
+@program #4000:find_topic
+"Given a string, which is the beginning of some topic name, return its full topic name. If it refers to no entry, return 0. If it could refer to more than one entry, return -1.";
+topic = args[1];
+topics = this.topics;
+topic_i = this:index_topic(topic);
+if (topic_i > length(topics))
+  return 0;
+else
+  if (index(topics[topic_i], topic) == 1)
+    if (topics[topic_i] == topic)
+      return topic;
+    elseif ((topic_i < length(topics)) && (index(topics[topic_i + 1], topic) == 1))
+      return -1;
+    else
+      return topics[topic_i];
+    endif
+  else
+    return 0;
+  endif
+endif
+.
+
+@verb #4000:"fetch_entry" this none this
+@program #4000:fetch_entry
+"Given the property that the entry is stored under, fetch the entry. If it's a plain entry, just return it. If it's a synonym entry, look up the main topic. If it's a chapter entry, find all the subentries and return the mass of them. If it's an index entry, call fetch_index.";
+topic = args[1];
+entry = this.("e_" + topic);
+if (entry[1] == 0)
+  return this:fetch_entry(entry[2]);
+elseif (entry[1] == 1)
+  return {@this:header(topic), @entry[2..length(entry)]};
+elseif (entry[1] == 2)
+  chapter = {};
+  for topic in (entry[2..length(entry)])
+    chapter = {@chapter, @this:fetch_entry(topic)};
+  endfor
+  return chapter;
+elseif (entry[1] == 3)
+  return {@this:header(topic), @this:fetch_index(entry[2], entry[3..length(entry)])};
+else
+  return {};
+endif
+.
+
+@verb #4000:"fetch_index" this none this
+@program #4000:fetch_index
+"Return a formatted index, all ready to print.";
+n_columns = args[1];
+types = args[2];
+indexed = {};
+for topic in (this.topics)
+  if (this.("e_" + topic)[1] in types)
+    indexed = {@indexed, topic};
+  endif
+endfor
+return this:columnize(indexed, n_columns);
+.
+
+@verb #4000:"add_topic" this none this
+@program #4000:add_topic
+"Add a new topic name to the list this.topics.";
+topic = args[1];
+topics = this.topics;
+i = this:index_topic(topic);
+if (i == 1)
+  this.topics = {topic, @topics};
+elseif (i > length(topics))
+  this.topics = {@topics, topic};
+else
+  this.topics = {@topics[1..i - 1], topic, @topics[i..length(topics)]};
+endif
+.
+
+@verb #4000:"writer" this none this
+@program #4000:writer
+"Return whether args[1] is allowed to make and change entries in the manual/encyclopedia. The owner is allowed to make entries even without being in the this.writers list. If this.writers is not a list, no one can write.";
+if (typeof(this.writers) == LIST)
+  return args[1] in {this.owner, @this.writers};
+else
+  return 0;
+endif
+.
+
+@verb #4000:"header" this none this
+@program #4000:header
+"Return the entry header, if any, as a list.";
+entry = args[1];
+header = {};
+for item in (this.entry_header)
+  header = {@header, strsub(item, "%h", entry)};
+endfor
+return header;
+.
+
+@verb #4000:"usage_msg not_found_msg ambiguous_msg" this none this
+@program #4000:usage_msg
+text = $string_utils:substitute(this.(verb), {{"%q", this.query_text}, {"%e", this.short_name}}, 1);
+return text;
+.
+
+@verb #4000:"lookup_topic" this none this
+@program #4000:lookup_topic
+"Look up a topic and return its text, or an error message.";
+this.query_text = query = args[1];
+topic = this:find_topic(query);
+if (topic == 0)
+  return this:not_found_msg();
+elseif (topic == -1)
+  return this:ambiguous_msg();
+else
+  return this:fetch_entry(topic);
+endif
+.
+
+@verb #4000:"columnize" this none this
+@program #4000:columnize
+"columnize (items, n [, width]) - Turn a one-column list of items into an n-column list. 'width' is the last character position that may be occupied; it defaults to a standard screen width.";
+items = args[1];
+n = args[2];
+if (length(args) >= 3)
+  width = args[3];
+else
+  width = 79;
+endif
+height = length(items) / n;
+if ((height * n) < length(items))
+  height = height + 1;
+endif
+colwidth = (width / n) - 1;
+result = {};
+for row in [1..height]
+  line = "";
+  for col in [1..n]
+    i = row + ((col - 1) * height);
+    if (i <= length(items))
+      item = items[i];
+      if (length(item) > colwidth)
+        item = item[1..colwidth];
+      endif
+      line = (line + $string_utils:left(item, colwidth)) + " ";
+    endif
+  endfor
+  result = {@result, $string_utils:trim(line)};
+endfor
+return result;
+.
+
+@verb #4000:"see_synonym" this none this
+@program #4000:see_synonym
+if (caller != this)
+  return E_PERM;
+endif
+entry = args[1];
+player:tell("This is a synonym entry.");
+if (length(entry) > 0)
+  player:tell_lines(entry);
+else
+  player:tell("The synonym has not been set yet.");
+endif
+.
+
+@verb #4000:"see_entry" this none this
+@program #4000:see_entry
+if (caller != this)
+  return E_PERM;
+endif
+entry = args[1];
+if (length(entry) > 0)
+  player:tell_lines(entry);
+else
+  player:tell("The entry is empty so far.");
+endif
+.
+
+@verb #4000:"see_chapter" this none this
+@program #4000:see_chapter
+if (caller != this)
+  return E_PERM;
+endif
+entry = args[1];
+player:tell("This is a chapter entry.");
+if (length(entry) > 0)
+  player:tell_lines(entry);
+else
+  player:tell("The chapter has no entries yet.");
+endif
+.
+
+@verb #4000:"see_index" this none this
+@program #4000:see_index
+if (caller != this)
+  return E_PERM;
+endif
+entry = args[1];
+player:tell("This is an index entry. The index will be printed in ", entry[1], " column", (entry[1] == 1) ? "." | "s.");
+if (length(entry) >= 2)
+  indices = "";
+  for index in (entry[2..length(entry)])
+    indices = (indices + " ") + {"synonyms", "entries", "chapters", "indices"}[index + 1];
+  endfor
+  player:tell("These entry types will be shown:", indices, ".");
+else
+  player:tell("The index is empty so far.");
+endif
+.
+
+@verb #4000:"@col*umns" this is any
+@program #4000:@columns
+"'@columns encyclopedia is 3' - if this is an index entry, set the number of columns that the index will print in.";
+if (!this:writer(caller))
+  player:tell(E_PERM);
+  return E_PERM;
+endif
+if (this.entry[1] == 3)
+  n = tonum(iobjstr);
+  if ((n < 1) || (n > 10))
+    player:tell("The column count must be a number between 1 and 10.");
+  else
+    this.entry[2] = n;
+    player:tell("The index will be printed in ", n, " column", (n == 1) ? "." | "s.");
+  endif
+else
+  player:tell("This is not an index entry.");
+endif
+.
+
+@verb #4000:"line_synonym" this none this
+@program #4000:line_synonym
+if (caller != this)
+  return E_PERM;
+endif
+text = args[1];
+if (text in this.topics)
+  this.entry = {this.entry[1], text};
+  player:tell("Synonym set.");
+else
+  player:tell("That's not a topic name, so this can't be a synonym of it.");
+endif
+.
+
+@verb #4000:"line_entry" this none this
+@program #4000:line_entry
+if (caller != this)
+  return E_PERM;
+endif
+text = args[1];
+this.entry = {@this.entry, text};
+player:tell("Line added.");
+.
+
+@verb #4000:"line_chapter" this none this
+@program #4000:line_chapter
+if (caller != this)
+  return E_PERM;
+endif
+text = args[1];
+if (text in this.topics)
+  this.entry = {@this.entry, text};
+  player:tell("Entry added to chapter.");
+else
+  player:tell("That's not a topic name, so it can't be added to the chapter.");
+endif
+.
+
+@verb #4000:"line_index" this none this
+@program #4000:line_index
+if (caller != this)
+  return E_PERM;
+endif
+text = args[1];
+if ((text == "") || (text[1] == "e"))
+  this.entry = {@this.entry, 1};
+  message = "Plain entries are now included in this index.";
+elseif (text[1] == "s")
+  this.entry = {@this.entry, 0};
+  message = "Synonym entries are now included in this index.";
+elseif (text[1] == "c")
+  this.entry = {@this.entry, 2};
+  message = "Chapter entries are now included in this index.";
+elseif (text[1] == "i")
+  this.entry = {@this.entry, 3};
+  message = "Index entries are now included in this index.";
+else
+  message = ("Nothing new has been added to this index entry. Try '@line " + this.short_name) + " is <type>', where <type> can be 'entry', 'synonym', 'chapter', or 'index'.";
+endif
+player:tell(message);
+.
+
+@verb #4000:"@remove" any from this r
+@program #4000:@remove
+"'@remove <topic> from encyclopedia' - Remove the given topic from the encyclopedia.";
+if (!this:writer(caller))
+  player:tell(E_PERM);
+  return E_PERM;
+endif
+topic = dobjstr;
+if (topic in this.topics)
+  result = delete_property(this, "e_" + topic);
+  if (typeof(result) == ERR)
+    player:tell("The attempt to delete the topic failed. Is ", this.short_name, " writable?");
+  else
+    this.topics = setremove(this.topics, topic);
+    player:tell("Topic removed.");
+  endif
+else
+  player:tell("That's not a topic name, so it can't be removed. (You have to spell out the name in full.)");
+endif
+.
+
+@verb #4000:"add_prop" this none this rx
+@program #4000:add_prop
+"Add a property, owned by Frand and readable, to the encyclopedia.";
+if (caller != this)
+  return E_PERM;
+endif
+return typeof($add_property(this, args[1], this.entry, {#47, "r"})) != ERR;
+.
+
+@verb #4000:"prop_exists" this none this rx
+@program #4000:prop_exists
+"Return whether a given property exists (it's assumed to be owned by Frand).";
+return typeof(this.(args[1])) != ERR;
+.
+
+@verb #4000:"@old" this is any
+@program #4000:@old
+"'@old encyclopedia is <entry>' - Fetch an existing entry from the encyclopedia into the working entry, so that you can add to it.";
+if (!this:writer(caller))
+  player:tell(E_PERM);
+  return E_PERM;
+endif
+this.query_text = query = iobjstr;
+topic = this:find_topic(query);
+if (topic == 0)
+  player:tell(this:not_found_msg());
+elseif (topic == -1)
+  player:tell(this:ambiguous_msg());
+else
+  this.entry = this.("e_" + topic);
+  player:tell("Old entry fetched.");
+endif
+.
+
+@verb #4000:"set_entry" this none this
+@program #4000:set_entry
+"'set_entry (<type>, <value>)' - Set the working entry to whatever you like. The <type> is 0 (synonym), 1 (ordinary entry), 2 (chapter), or 3 (index). The <value> is a list; its contents depend on the type. For an ordinary entry, it is a list of strings.";
+c = callers();
+if (((!c) && (player != this.owner)) || (c && (c[1][3] != this.owner)))
+  return E_PERM;
+endif
+if (length(args) != 2)
+  return E_INVARG;
+endif
+type = args[1];
+entry = args[2];
+if ((!(type in {0, 1, 2, 3})) || (typeof(entry) != LIST))
+  return E_INVARG;
+endif
+this.entry = {type, @entry};
+.
+
+@verb #4000:"tell_lines_to" this none this
+@program #4000:tell_lines_to
+"'tell_lines_to (<player>, <msg>)' - A replacement for player:tell_lines (<msg>), which checks the time to make sure it doesn't run out.";
+who = args[1];
+lines = args[2];
+if (typeof(lines) != LIST)
+  lines = {lines};
+endif
+for line in (lines)
+  who:tell(line);
+  if ((ticks_left() < 1000) || (seconds_left() < 2))
+    suspend(0);
+  endif
+endfor
+.
