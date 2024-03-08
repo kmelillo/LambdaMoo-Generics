@@ -1,0 +1,253 @@
+@create #83818 named Frand's generic magnetic thing:Frand's generic magnetic thing,generic magnetic thing,magnetic thing
+@prop #2712."arrive_msg" "" rc
+@prop #2712."moveto_kludge" 0 r
+@prop #2712."ticking" 0 r
+@prop #2712."touched" 1 r
+@prop #2712."go_home_msg" "" rc
+@prop #2712."home" #11 r
+@prop #2712."time_interval" -1 r
+@prop #2712."magnetic_thing" #2712 r
+@prop #2712."generic_magnetic_thing" #2712 r
+"#2712.("key") => E_PERM (Permission denied)
+;;#2712.("aliases") = {"Frand's generic magnetic thing", "generic magnetic thing", "magnetic thing"}
+;;#2712.("description") = "A magnetic thing is one which is attracted to its home room. After it is picked up, it checks once each time_interval whether it has been touched in any way during the interval. A magnetic thing is touched whenever some verb tells it that it is. This way, you can have a thing which goes home if it is picked up and not used for some period of time. The time_interval is given in seconds. Setting it negative will demagnetize the object."
+;;#2712.("object_size") = {13037, 1709798776}
+
+@verb #2712:"moveto" none none none rxd
+@program #2712:moveto
+"Move the object. If the movement is successful, and the destination isn't the home room, start up the wait loop.";
+"Modified 9/18/98 by TheCat to use (verb) :time_interval instead of";
+"(prop) .time_interval.";
+if (this.moveto_kludge)
+  this.moveto_kludge = 0;
+  pass(@args);
+else
+  from_here = this.location;
+  pass(@args);
+  if ((((this.location != this:home()) && (from_here != this.location)) && (!this.ticking)) && (this:time_interval() >= 0))
+    this.touched = 1;
+    this.ticking = 1;
+    this:wait();
+  endif
+endif
+.
+
+@verb #2712:"touch" this none none rxd
+@program #2712:touch
+"'touch <thing>' - tell the object that it has been used, and needn't go home this time_interval. Override this if you don't want your users to use it.";
+this:touch1();
+player:tell("You touch ", this.name, ".");
+.
+
+@verb #2712:"go_home_msg arrive_msg" none none none rxd
+@program #2712:go_home_msg
+"Return the text of a message, performing substitutions.";
+here = this.location;
+home = this:home();
+text = $string_utils:substitute(this.(verb), {{"%n", this.name}, {"%f", valid(here) ? here.name | "nowhere"}, {"%t", valid(home) ? home.name | "nowhere"}}, 1);
+return text;
+.
+
+@verb #2712:"go_somewhere" none none none rxd
+@program #2712:go_somewhere
+"Move the object to a given location, its home.";
+if (this:insecure(caller))
+  return E_PERM;
+endif
+dest = args[1];
+source = this.location;
+this:announce(this:go_home_msg() || (this.name + " suddenly jumps into the air and flies home."));
+arrive_msg = this:arrive_msg() || (this.name + " flies in and settles down.");
+this.moveto_kludge = 1;
+this:moveto(dest);
+if (((this.location == dest) && (((!valid(source)) || (source.location != dest)) || (!is_player(source)))) && (((!valid(dest)) || (dest.location != source)) || (!is_player(dest))))
+  this:announce(arrive_msg);
+endif
+return 1;
+.
+
+@verb #2712:"go_home" this none none rxd
+@program #2712:go_home
+"'go_home <thing>' - Move the thing home. If it can't go home, move it to its owner's home. If it can't go there either, just leave it where it is. You have to be either holding the object, or in the room with it, or be its owner, or be a wizard, to send it home. This verb is called both by users and by other verbs.";
+if ((((this.location != caller) && (this.location != caller.location)) && (caller.owner != this.owner)) && (!caller.wizard))
+  return E_PERM;
+endif
+this.ticking = 0;
+home = this:home();
+if ((this.location == home) || this:stay_here_after_all())
+  return;
+endif
+if ((home == #-1) || ($recycler:valid(home) && home:accept(this)))
+  this:go_somewhere(home);
+elseif ($recycler:valid(this.owner.home) && this.owner.home:accept(this))
+  this:go_somewhere(this.owner.home);
+endif
+.
+
+@verb #2712:"wait" none none none rxd
+@program #2712:wait
+"Called whenever the object is moved, to start counting off time_intervals.";
+"Modified 9/18/98 by TheCat to use a verb for time_interval instead of a property.";
+if (caller != this)
+  return E_PERM;
+endif
+if ((!this.touched) || (this.location == this:home()))
+  "Untouched, or already home. Stop the cycle (and go home if needed).";
+  this:go_home();
+else
+  "Touched, safe for this interval. Start up the next interval.";
+  this.touched = 0;
+  fork (this:time_interval())
+    if ($object_utils:isa(this, $code_utils:verb_location()))
+      this:wait();
+    endif
+  endfork
+endif
+.
+
+@verb #2712:"touch1" none none none rxd
+@program #2712:touch1
+"Mark the thing as touched, so it won't go home during this time_interval.";
+if (this:insecure(caller))
+  return E_PERM;
+endif
+this.touched = 1;
+.
+
+@verb #2712:"announce" none none none rxd
+@program #2712:announce
+"'announce (<message>)' - Announce to the room, if any. The message can be a string or a list.";
+if (this:insecure(caller))
+  return E_PERM;
+endif
+message = args[1];
+place = this.location;
+if (!valid(place))
+  return;
+endif
+if (is_player(place))
+  place = place.location;
+  if (!valid(place))
+    return;
+  endif
+endif
+if (typeof(message) == LIST)
+  for item in (message)
+    this:announce(item);
+  endfor
+elseif ($object_utils:has_callable_verb(place, "announce_all"))
+  place:announce_all(message);
+  "else";
+  "  (the place doesn't deserve a message)";
+endif
+.
+
+@verb #2712:"set_h*ome" this to any rxd
+@program #2712:set_home
+"'set_home <thing> to <location>' - set the magnetic thing's home location.";
+if (this:insecure(caller))
+  player:tell(E_PERM);
+  return E_PERM;
+endif
+location = player.location:match_object(iobjstr);
+if ((location == #-1) || (!$command_utils:object_match_failed(location, iobjstr)))
+  this:set_home1(location);
+  player:tell("The home of ", this.name, " is now ", location, ".");
+endif
+.
+
+@verb #2712:"set_t*ime" this to any rxd
+@program #2712:set_time
+"'set_time <thing> to 300' - Set the object's time_interval, in seconds. If the time_interval is negative, the object will be demagnetized. Otherwise, it will check whether to go home after each chunk of time_interval seconds. (300 seconds is five minutes. 3600 seconds is an hour.)";
+if (this:insecure(caller))
+  player:tell(E_PERM);
+  return E_PERM;
+endif
+this:set_time1(tonum(iobjstr));
+if (this.time_interval < 0)
+  player:tell(this.name, " is demagnetized, for now.");
+else
+  player:tell(this.name, "'s time interval is now ", this.time_interval, " seconds.");
+endif
+.
+
+@verb #2712:"fixup" this none none rxd
+@program #2712:fixup
+"'fixup <thing>' - If you (or Frand, actually; it owns the tasks) should @kill a magnetic thing's task before the task finishes, the object will be broken. Its properties will be set inconsistently, and its magnetism will fail. You'll have to fix it up with this verb, which sends it home and resets its properties.";
+if (this:insecure(caller))
+  player:tell(E_PERM);
+  return E_PERM;
+endif
+this:fixup1();
+player:tell("The ", this.name, " is fixed up and sent home.");
+.
+
+@verb #2712:"set_home1" none none none rxd
+@program #2712:set_home1
+"This verb allows you to set the thing's home from within your own verbs, which don't have permission to do it themselves.";
+if (this:insecure(caller))
+  return E_PERM;
+endif
+this.home = args[1];
+return 1;
+.
+
+@verb #2712:"set_time1" none none none rxd
+@program #2712:set_time1
+"This verb allows you to set the thing's time_interval from within your own verbs, which don't have permission to do it themselves.";
+if (this:insecure(caller))
+  return E_PERM;
+endif
+this.time_interval = args[1];
+return 1;
+.
+
+@verb #2712:"fixup1" none none none rxd
+@program #2712:fixup1
+"This verb allows you to fix the thing up from within your own verbs, which don't have permission to do it themselves.";
+if (this:insecure(caller))
+  return E_PERM;
+endif
+if (valid(home = this:home()))
+  this.moveto_kludge = 1;
+  this:moveto(home);
+endif
+this.touched = 0;
+this.ticking = 0;
+this.moveto_kludge = 0;
+return 1;
+.
+
+@verb #2712:"insecure" this none this
+@program #2712:insecure
+"'insecure (caller)' - Check the callers() list to see whether the caller of the caller of this verb is an OK one. You can customize this to provide different security arrangements; caller is passed to give you flexibility.";
+who = (length(callers()) < 2) ? player | callers()[2][3];
+return !((who in {this.owner, #2712.owner}) || who.wizard);
+.
+
+@verb #2712:"stay_here_after_all" this none this
+@program #2712:stay_here_after_all
+"'stay_here_after_all ()' - This verb is called when it is time for the magnetic thing to return home. If you override it to return 1, the thing will stay put instead of going home. For example, if you do 'return this.location == this.owner;', then when you pick up your magnetic thing, it will stay with you until you drop it.";
+return 0;
+.
+
+@verb #2712:"home" this none this
+@program #2712:home
+"Return the thing's home. This is written as a verb so that it can be overridden if the thing's home needs to be computed on the fly.";
+return this.home;
+.
+
+@verb #2712:"set_moveto_kludge" this none this
+@program #2712:set_moveto_kludge
+"This verb allows you to set the .moveto_kludge property in your own verbs, which don't have permission to do it themselves.";
+if (this:insecure(caller))
+  return E_PERM;
+endif
+this.moveto_kludge = args[1];
+return 1;
+.
+
+@verb #2712:"time_interval" this none this
+@program #2712:time_interval
+return this.(verb);
+.
